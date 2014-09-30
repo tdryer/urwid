@@ -39,7 +39,7 @@ exec(open(os.path.join("urwid","version.py")).read())
 release = __version__
 
 setup_d = {
-    'name':"urwid",
+    'name':"hangups-urwid",
     'version':release,
     'author':"Ian Ward",
     'author_email':"ian@excess.org",
