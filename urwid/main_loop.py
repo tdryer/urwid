@@ -1231,6 +1231,10 @@ class AsyncioEventLoop(object):
         else:
             import asyncio
             self._loop = asyncio.get_event_loop()
+        self._idle_handle = 0
+        self._idle_enabled = False
+        self._idle_callbacks = {}
+        self._schedule_idle_callbacks(lambda: None)
 
     def alarm(self, seconds, callback):
         """
@@ -1242,7 +1246,9 @@ class AsyncioEventLoop(object):
         seconds -- time in seconds to wait before calling callback
         callback -- function to call from event loop
         """
-        return self._loop.call_later(seconds, callback)
+        return self._loop.call_later(
+            seconds, lambda: self._schedule_idle_callbacks(callback)
+        )
 
     def remove_alarm(self, handle):
         """
@@ -1264,7 +1270,9 @@ class AsyncioEventLoop(object):
         fd -- file descriptor to watch for input
         callback -- function to call when input is available
         """
-        self._loop.add_reader(fd, callback)
+        self._loop.add_reader(
+            fd, lambda: self._schedule_idle_callbacks(callback)
+        )
         return fd
 
     def remove_watch_file(self, handle):
@@ -1281,19 +1289,9 @@ class AsyncioEventLoop(object):
 
         Returns a handle that may be passed to remove_idle()
         """
-        # XXX there's no such thing as "idle" in most event loops; this fakes
-        # it the same way as Twisted, by scheduling the callback to be called
-        # repeatedly
-        mutable_handle = [None]
-        def faux_idle_callback():
-            callback()
-            mutable_handle[0] = self._loop.call_later(
-                self._idle_emulation_delay, faux_idle_callback)
-
-        mutable_handle[0] = self._loop.call_later(
-            self._idle_emulation_delay, faux_idle_callback)
-
-        return mutable_handle
+        self._idle_handle += 1
+        self._idle_callbacks[self._idle_handle] = callback
+        return self._idle_handle
 
     def remove_enter_idle(self, handle):
         """
@@ -1301,8 +1299,26 @@ class AsyncioEventLoop(object):
 
         Returns True if the handle was removed.
         """
-        # `handle` is just a list containing the current actual handle
-        return self.remove_alarm(handle[0])
+        try:
+            del self._idle_callbacks[handle]
+        except KeyError:
+            return False
+        return True
+
+    def _run_idle_callbacks(self):
+        """Run all idle callbacks."""
+        for callback in self._idle_callbacks.values():
+            callback()
+        self._idle_enabled = False
+
+    def _schedule_idle_callbacks(self, callback):
+        """Call callback and schedule idle callbacks to run later."""
+        res = callback()
+        if not self._idle_enabled:
+            self._loop.call_later(self._idle_emulation_delay,
+                                  self._run_idle_callbacks)
+            self._idle_enabled = True
+        return res
 
     _exc_info = None
 
